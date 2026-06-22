@@ -13,17 +13,14 @@ PHONE="lavender"
 ARCH="arm64"
 SUBARCH="arm64"
 DEFCONFIG=lavender-perf_defconfig 
-#DEFCONFIG=beryllium_defconfig
 COMPILER=clang
 LINKER=""
-COMPILERDIR="$(pwd)/clang"
+KERNEL_DIR=$(pwd)
+PATH="${KERNEL_DIR}/clang/bin:${KERNEL_DIR}/gcc/bin:${KERNEL_DIR}/gcc32/bin:${PATH}"
 
-if [ ! -d "$COMPILERDIR" ]; then
-mkdir clang
-cd clang
- wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/42d2c090c14c9c7f4dfd365ae551e2b959dc775c/clang-r584948b.tar.gz && tar -xf * && rm -rf *.gz
-cd ..
-    fi
+git clone --depth=1 https://github.com/sohamxda7/llvm-stable  clang
+git clone https://github.com/sohamxda7/llvm-stable -b gcc64 --depth=1 gcc
+git clone https://github.com/sohamxda7/llvm-stable -b gcc32  --depth=1 gcc32
 
 # Outputs
 mkdir -p zone_lave
@@ -47,20 +44,18 @@ red='\033[0;31m'
 nocol='\033[0m'
 
 Build () {
-PATH="${COMPILERDIR}/bin:${PATH}" \
 make -j$(nproc --all) O=out \
 ARCH=${ARCH} \
 LLVM=1 LLVM_IAS=1 \
 CC=${COMPILER} \
-CROSS_COMPILE=${COMPILERDIR}/bin/aarch64-linux-gnu- \
-CROSS_COMPILE_ARM32=${COMPILERDIR}/bin/arm-linux-gnueabi- \
+CROSS_COMPILE=aarch64-linux-gnu- \
+CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
 LD=ld.lld \
 AR=llvm-ar \
 NM=llvm-nm \
 OBJCOPY=llvm-objcopy \
 OBJDUMP=llvm-objdump \
-STRIP=llvm-strip \
-LD_LIBRARY_PATH=${COMPILERDIR}/lib
+STRIP=llvm-strip 
 }
 
 # Make defconfig
