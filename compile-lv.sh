@@ -6,7 +6,7 @@
 curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
 # Some general variables
-PHONE="lavender"
+PHONE="lave"
 ARCH="arm64"
 SUBARCH="arm64"
 DEFCONFIG=lavender-perf_defconfig 
