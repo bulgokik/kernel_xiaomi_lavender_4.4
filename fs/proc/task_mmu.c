@@ -376,6 +376,7 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma, int is_pid)
 	end = vma->vm_end;
 	show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino);
 
+bypass:
 	/*
 	 * Print the dentry name for named mappings, and a
 	 * special [heap] marker for the heap:
