@@ -9,7 +9,7 @@ rm -rf out
 make clean
 make mrproper
 # Some general variables
-PHONE="lavender"
+PHONE="lave"
 ARCH="arm64"
 SUBARCH="arm64"
 DEFCONFIG=lavender-perf_defconfig 
