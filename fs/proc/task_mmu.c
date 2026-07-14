@@ -362,6 +362,12 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma, int is_pid)
             	name = "/dev/ashmem (deleted)";
 		goto done;
             	 	}
+	if (strstr(path, "jit-zygote-cache")) {
+				start = vma->vm_start;
+				end = vma->vm_end;
+				show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino);
+				goto bypass;
+			}
             	}
 	}
 
