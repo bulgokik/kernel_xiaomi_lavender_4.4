@@ -3,11 +3,8 @@
 # Many parts of this script were taken from @REIGNZ, @idkwhoiam322 and @raphielscape . Huge thanks to them.
 
 # KernelSu
-curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
-#Cleaning
-rm -rf out
-make clean
-make mrproper
+curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+
 # Some general variables
 PHONE="lavender"
 ARCH="arm64"
