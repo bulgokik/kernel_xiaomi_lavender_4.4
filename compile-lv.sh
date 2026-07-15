@@ -46,16 +46,10 @@ nocol='\033[0m'
 Build () {
 make -j$(nproc --all) O=out \
 ARCH=${ARCH} \
-LLVM=1 LLVM_IAS=1 \
-CC=${COMPILER} \
-CROSS_COMPILE=aarch64-linux-gnu- \
-CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-LD=ld.lld \
-AR=llvm-ar \
-NM=llvm-nm \
-OBJCOPY=llvm-objcopy \
-OBJDUMP=llvm-objdump \
-STRIP=llvm-strip 
+CC=clang \
+CLANG_TRIPLE=aarch64-linux-gnu- \
+CROSS_COMPILE=aarch64-linux-android- \
+CROSS_COMPILE_ARM32=arm-linux-androideabi-
 }
 
 # Make defconfig
