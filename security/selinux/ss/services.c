@@ -71,29 +71,21 @@
 #include "audit.h"
 
 int selinux_android_netlink_route;
-int selinux_policycap_netpeer;
-int selinux_policycap_openperm;
-int selinux_policycap_alwaysnetwork;
 
-static DEFINE_RWLOCK(policy_rwlock);
+static struct selinux_ss selinux_ss;
 
-static struct sidtab sidtab;
-struct policydb policydb;
-int ss_initialized;
-
-/*
- * The largest sequence number that has been used when
- * providing an access decision to the access vector cache.
- * The sequence number only changes when a policy change
- * occurs.
- */
-static u32 latest_granting;
+void selinux_ss_init(struct selinux_ss **ss)
+{
+	rwlock_init(&selinux_ss.policy_rwlock);
+	mutex_init(&selinux_ss.status_lock);
+	*ss = &selinux_ss;
+}
 
 /* Forward declaration. */
-static int context_struct_to_string(struct context *context, char **scontext,
+static int context_struct_to_string(struct policydb *policydb, struct context *context, char **scontext,
 				    u32 *scontext_len);
 
-static void context_struct_compute_av(struct context *scontext,
+static void context_struct_compute_av(struct policydb *policydb, struct context *scontext,
 					struct context *tcontext,
 					u16 tclass,
 					struct av_decision *avd,
@@ -110,11 +102,8 @@ static u16 current_mapping_size;
 
 static int selinux_set_mapping(struct policydb *pol,
 			       struct security_class_mapping *map,
-			       struct selinux_mapping **out_map_p,
-			       u16 *out_map_size)
+ 			       struct selinux_map *out_map)
 {
-	struct selinux_mapping *out_map = NULL;
-	size_t size = sizeof(struct selinux_mapping);
 	u16 i, j;
 	unsigned k;
 	bool print_unknown_handle = false;
@@ -127,15 +116,15 @@ static int selinux_set_mapping(struct policydb *pol,
 		i++;
 
 	/* Allocate space for the class records, plus one for class zero */
-	out_map = kcalloc(++i, size, GFP_ATOMIC);
-	if (!out_map)
+	out_map->mapping = kcalloc(++i, sizeof(*out_map->mapping), GFP_ATOMIC);
+	if (!out_map->mapping)
 		return -ENOMEM;
 
 	/* Store the raw class and permission values */
 	j = 0;
 	while (map[j].name) {
 		struct security_class_mapping *p_in = map + (j++);
-		struct selinux_mapping *p_out = out_map + j;
+		struct selinux_mapping *p_out = out_map->mapping + j;
 
 		/* An empty class string skips ahead */
 		if (!strcmp(p_in->name, "")) {
@@ -182,11 +171,11 @@ static int selinux_set_mapping(struct policydb *pol,
 		printk(KERN_INFO "SELinux: the above unknown classes and permissions will be %s\n",
 		       pol->allow_unknown ? "allowed" : "denied");
 
-	*out_map_p = out_map;
-	*out_map_size = i;
+	out_map->size = i;
 	return 0;
 err:
-	kfree(out_map);
+	kfree(out_map->mapping);
+	out_map->mapping = NULL;
 	return -EINVAL;
 }
 
@@ -194,10 +183,10 @@ err:
  * Get real, policy values from mapped values
  */
 
-static u16 unmap_class(u16 tclass)
+static u16 unmap_class(struct selinux_map *map, u16 tclass)
 {
-	if (tclass < current_mapping_size)
-		return current_mapping[tclass].value;
+	if (tclass < map->size)
+		return map->mapping[tclass].value;
 
 	return tclass;
 }
@@ -205,42 +194,43 @@ static u16 unmap_class(u16 tclass)
 /*
  * Get kernel value for class from its policy value
  */
-static u16 map_class(u16 pol_value)
+static u16 map_class(struct selinux_map *map, u16 pol_value)
 {
 	u16 i;
 
-	for (i = 1; i < current_mapping_size; i++) {
-		if (current_mapping[i].value == pol_value)
+	for (i = 1; i < map->size; i++) {
+		if (map->mapping[i].value == pol_value)
 			return i;
 	}
 
 	return SECCLASS_NULL;
 }
 
-static void map_decision(u16 tclass, struct av_decision *avd,
+static void map_decision(struct selinux_map *map, u16 tclass, struct av_decision *avd,
 			 int allow_unknown)
 {
-	if (tclass < current_mapping_size) {
-		unsigned i, n = current_mapping[tclass].num_perms;
+	if (tclass < map->size) {
+		struct selinux_mapping *mapping = &map->mapping[tclass];
+		unsigned i, n = mapping->num_perms;
 		u32 result;
 
 		for (i = 0, result = 0; i < n; i++) {
-			if (avd->allowed & current_mapping[tclass].perms[i])
+			if (avd->allowed & mapping->perms[i])
 				result |= 1<<i;
-			if (allow_unknown && !current_mapping[tclass].perms[i])
+			if (allow_unknown && !mapping->perms[i])
 				result |= 1<<i;
 		}
 		avd->allowed = result;
 
 		for (i = 0, result = 0; i < n; i++)
-			if (avd->auditallow & current_mapping[tclass].perms[i])
+			if (avd->auditallow & mapping->perms[i])
 				result |= 1<<i;
 		avd->auditallow = result;
 
 		for (i = 0, result = 0; i < n; i++) {
-			if (avd->auditdeny & current_mapping[tclass].perms[i])
+			if (avd->auditdeny & mapping->perms[i])
 				result |= 1<<i;
-			if (!allow_unknown && !current_mapping[tclass].perms[i])
+			if (!allow_unknown && !mapping->perms[i])
 				result |= 1<<i;
 		}
 		/*
@@ -254,9 +244,10 @@ static void map_decision(u16 tclass, struct av_decision *avd,
 	}
 }
 
-int security_mls_enabled(void)
+int security_mls_enabled(struct selinux_state *state)
 {
-	return policydb.mls_enabled;
+	struct policydb *p = &state->ss->policydb;
+	return p->mls_enabled;
 }
 
 /*
@@ -270,7 +261,8 @@ int security_mls_enabled(void)
  * of the process performing the transition.  All other callers of
  * constraint_expr_eval should pass in NULL for xcontext.
  */
-static int constraint_expr_eval(struct context *scontext,
+static int constraint_expr_eval(struct policydb *policydb, 
+				struct context *scontext,
 				struct context *tcontext,
 				struct context *xcontext,
 				struct constraint_expr *cexpr)
@@ -314,8 +306,8 @@ static int constraint_expr_eval(struct context *scontext,
 			case CEXPR_ROLE:
 				val1 = scontext->role;
 				val2 = tcontext->role;
-				r1 = policydb.role_val_to_struct[val1 - 1];
-				r2 = policydb.role_val_to_struct[val2 - 1];
+				r1 = policydb->role_val_to_struct[val1 - 1];
+				r2 = policydb->role_val_to_struct[val2 - 1];
 				switch (e->op) {
 				case CEXPR_DOM:
 					s[++sp] = ebitmap_get_bit(&r1->dominates,
@@ -460,7 +452,8 @@ static int dump_masked_av_helper(void *k, void *d, void *args)
 	return 0;
 }
 
-static void security_dump_masked_av(struct context *scontext,
+static void security_dump_masked_av(struct policydb *policydb, 
+				    struct context *scontext,
 				    struct context *tcontext,
 				    u16 tclass,
 				    u32 permissions,
@@ -480,8 +473,8 @@ static void security_dump_masked_av(struct context *scontext,
 	if (!permissions)
 		return;
 
-	tclass_name = sym_name(&policydb, SYM_CLASSES, tclass - 1);
-	tclass_dat = policydb.class_val_to_struct[tclass - 1];
+	tclass_name = sym_name(policydb, SYM_CLASSES, tclass - 1);
+	tclass_dat = policydb->class_val_to_struct[tclass - 1];
 	common_dat = tclass_dat->comdatum;
 
 	/* init permission_names */
@@ -495,11 +488,11 @@ static void security_dump_masked_av(struct context *scontext,
 		goto out;
 
 	/* get scontext/tcontext in text form */
-	if (context_struct_to_string(scontext,
+	if (context_struct_to_string(policydb, scontext,
 				     &scontext_name, &length) < 0)
 		goto out;
 
-	if (context_struct_to_string(tcontext,
+	if (context_struct_to_string(policydb, tcontext,
 				     &tcontext_name, &length) < 0)
 		goto out;
 
@@ -538,7 +531,8 @@ out:
  * security_boundary_permission - drops violated permissions
  * on boundary constraint.
  */
-static void type_attribute_bounds_av(struct context *scontext,
+static void type_attribute_bounds_av(struct policydb *policydb, 
+				     struct context *scontext,
 				     struct context *tcontext,
 				     u16 tclass,
 				     struct av_decision *avd)
@@ -550,11 +544,11 @@ static void type_attribute_bounds_av(struct context *scontext,
 	struct type_datum *target;
 	u32 masked = 0;
 
-	source = flex_array_get_ptr(policydb.type_val_to_struct_array,
+	source = flex_array_get_ptr(policydb->type_val_to_struct_array,
 				    scontext->type - 1);
 	BUG_ON(!source);
 
-	target = flex_array_get_ptr(policydb.type_val_to_struct_array,
+	target = flex_array_get_ptr(policydb->type_val_to_struct_array,
 				    tcontext->type - 1);
 	BUG_ON(!target);
 
@@ -564,7 +558,7 @@ static void type_attribute_bounds_av(struct context *scontext,
 		memcpy(&lo_scontext, scontext, sizeof(lo_scontext));
 		lo_scontext.type = source->bounds;
 
-		context_struct_compute_av(&lo_scontext,
+		context_struct_compute_av(policydb, &lo_scontext,
 					  tcontext,
 					  tclass,
 					  &lo_avd,
@@ -612,7 +606,7 @@ static void type_attribute_bounds_av(struct context *scontext,
 		avd->allowed &= ~masked;
 
 		/* audit masked permissions */
-		security_dump_masked_av(scontext, tcontext,
+		security_dump_masked_av(policydb, scontext, tcontext,
 					tclass, masked, "bounds");
 	}
 }
@@ -646,7 +640,8 @@ void services_compute_xperms_drivers(
  * Compute access vectors and extended permissions based on a context
  * structure pair for the permissions in a particular class.
  */
-static void context_struct_compute_av(struct context *scontext,
+static void context_struct_compute_av(struct policydb *policydb, 
+				      struct context *scontext,
 					struct context *tcontext,
 					u16 tclass,
 					struct av_decision *avd,
@@ -669,13 +664,13 @@ static void context_struct_compute_av(struct context *scontext,
 		xperms->len = 0;
 	}
 
-	if (unlikely(!tclass || tclass > policydb.p_classes.nprim)) {
+	if (unlikely(!tclass || tclass > policydb->p_classes.nprim)) {
 		if (printk_ratelimit())
 			printk(KERN_WARNING "SELinux:  Invalid class %hu\n", tclass);
 		return;
 	}
 
-	tclass_datum = policydb.class_val_to_struct[tclass - 1];
+	tclass_datum = policydb->class_val_to_struct[tclass - 1];
 
 	/*
 	 * If a specific type enforcement rule was defined for
