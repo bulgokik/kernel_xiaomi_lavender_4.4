@@ -3,7 +3,7 @@
 # Many parts of this script were taken from @REIGNZ, @idkwhoiam322 and @raphielscape . Huge thanks to them.
 
 # KernelSu
-curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/kernel/setup.sh" | bash -s master
+curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s 
 #Cleaning
 rm -rf out
 make clean
